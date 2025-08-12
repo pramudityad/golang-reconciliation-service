@@ -1,0 +1,5 @@
+transaction_id,transaction_amount,posting_date,transaction_description
+TXN_001,100.50,01/15/2024,Deposit
+TXN_002,-250.00,01/15/2024,Withdrawal
+TXN_003,75.25,01/16/2024,Transfer In
+TXN_004,-500.00,01/16/2024,Payment Out
