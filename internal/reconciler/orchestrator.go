@@ -9,6 +9,8 @@ import (
 	"golang-reconciliation-service/internal/matcher"
 	"golang-reconciliation-service/internal/models"
 	"golang-reconciliation-service/internal/parsers"
+	"golang-reconciliation-service/pkg/errors"
+	"golang-reconciliation-service/pkg/logger"
 
 	"github.com/shopspring/decimal"
 )
@@ -17,6 +19,7 @@ import (
 type ReconciliationOrchestrator struct {
 	service      *ReconciliationService
 	preprocessor *DataPreprocessor
+	logger       logger.Logger
 	
 	// Progress tracking
 	progressCallbacks []ProgressCallback
@@ -56,18 +59,30 @@ func NewReconciliationOrchestrator(
 ) (*ReconciliationOrchestrator, error) {
 	
 	if service == nil {
-		return nil, fmt.Errorf("reconciliation service is required")
+		return nil, errors.ValidationError(
+			errors.CodeMissingField,
+			"reconciliation_service",
+			nil,
+			nil,
+		).WithSuggestion("Provide a valid ReconciliationService instance")
 	}
+	
+	log := logger.GetGlobalLogger().WithComponent("reconciliation_orchestrator")
+	log.Debug("Creating reconciliation orchestrator")
 	
 	preprocessor := NewDataPreprocessor(preprocessingConfig)
 	
-	return &ReconciliationOrchestrator{
+	orchestrator := &ReconciliationOrchestrator{
 		service:      service,
 		preprocessor: preprocessor,
+		logger:       log,
 		currentProgress: &ReconciliationProgress{
 			TotalSteps: 6, // Parse system, parse banks, preprocess, filter, match, aggregate
 		},
-	}, nil
+	}
+	
+	log.Info("Reconciliation orchestrator created successfully")
+	return orchestrator, nil
 }
 
 // AddProgressCallback adds a progress callback function
@@ -82,26 +97,53 @@ func (ro *ReconciliationOrchestrator) ProcessReconciliationWithAdvancedFeatures(
 	options *ReconciliationOptions,
 ) (*EnhancedReconciliationResult, error) {
 	
+	ro.logger.WithFields(logger.Fields{
+		"system_file":      request.SystemFile,
+		"bank_files_count": len(request.BankFiles),
+	}).Info("Starting advanced reconciliation process")
+	
 	// Initialize progress tracking
 	ro.initializeProgress()
 	
 	startTime := time.Now()
 	defer func() {
-		ro.updateProgress("Completed", 6, time.Since(startTime))
+		elapsed := time.Since(startTime)
+		ro.updateProgress("Completed", 6, elapsed)
+		ro.logger.WithField("elapsed_time", elapsed).Info("Advanced reconciliation process completed")
 	}()
 	
 	// Step 1: Validate request and options
 	ro.updateProgress("Validating request", 0, 0)
+	ro.logger.Debug("Validating advanced reconciliation request")
+	
 	if err := ro.validateAdvancedRequest(request, options); err != nil {
-		return nil, fmt.Errorf("request validation failed: %w", err)
+		ro.logger.WithError(err).Error("Advanced request validation failed")
+		return nil, errors.ValidationError(
+			errors.CodeInvalidConfig,
+			"reconciliation_request",
+			request,
+			err,
+		).WithSuggestion("Check the reconciliation request parameters and options")
 	}
 	
 	// Step 2: Parse system transactions with preprocessing
 	ro.updateProgress("Parsing system transactions", 1, time.Since(startTime))
+	ro.logger.WithField("system_file", request.SystemFile).Info("Parsing system transactions")
+	
 	transactions, txStats, err := ro.parseAndPreprocessTransactions(ctx, request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse system transactions: %w", err)
+		ro.logger.WithError(err).WithField("system_file", request.SystemFile).Error("Failed to parse system transactions")
+		return nil, errors.ReconciliationError(
+			errors.CodeProcessingError,
+			"transaction_parsing",
+			err,
+		).WithSuggestion("Check the system transaction file format and try again")
 	}
+	
+	ro.logger.WithFields(logger.Fields{
+		"transactions_count": len(transactions),
+		"parse_stats":        txStats,
+	}).Info("Successfully parsed system transactions")
 	
 	// Step 3: Parse bank statements with preprocessing
 	ro.updateProgress("Parsing bank statements", 2, time.Since(startTime))

@@ -41,7 +41,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	// Global flags
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is ./reconciler.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (optional)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 
 	// Bind flags to viper
@@ -53,21 +53,21 @@ func initConfig() {
 	if cfgFile != "" {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
-	} else {
-		// Search config in current directory with name "reconciler" (without extension).
-		viper.AddConfigPath(".")
-		viper.SetConfigType("yaml")
-		viper.SetConfigName("reconciler")
+		
+		// If a config file is specified, read it in.
+		if err := viper.ReadInConfig(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading config file: %s\n", err)
+			os.Exit(1)
+		}
+		
+		if viper.GetBool("verbose") {
+			fmt.Fprintf(os.Stderr, "Using config file: %s\n", viper.ConfigFileUsed())
+		}
 	}
 
 	// Read environment variables that match
 	viper.SetEnvPrefix("RECONCILER")
 	viper.AutomaticEnv()
-
-	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil && viper.GetBool("verbose") {
-		fmt.Fprintf(os.Stderr, "Using config file: %s\n", viper.ConfigFileUsed())
-	}
 }
 
 // SetVersionInfo sets the version information for the CLI

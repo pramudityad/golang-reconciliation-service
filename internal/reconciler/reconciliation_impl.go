@@ -258,8 +258,13 @@ func (rs *ReconciliationService) performMatching(
 ) (*matcher.ReconciliationResult, error) {
 	
 	// Load data into matching engine
-	rs.matchingEngine.LoadTransactions(transactions)
-	rs.matchingEngine.LoadBankStatements(statements)
+	if err := rs.matchingEngine.LoadTransactions(transactions); err != nil {
+		return nil, fmt.Errorf("failed to load transactions into matching engine: %w", err)
+	}
+	
+	if err := rs.matchingEngine.LoadBankStatements(statements); err != nil {
+		return nil, fmt.Errorf("failed to load bank statements into matching engine: %w", err)
+	}
 	
 	// Perform reconciliation
 	result, err := rs.matchingEngine.Reconcile()
