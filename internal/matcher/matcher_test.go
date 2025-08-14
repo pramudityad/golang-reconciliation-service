@@ -238,7 +238,10 @@ func TestMatchingEngine_scoreMatch(t *testing.T) {
 		Date:             time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
 	}
 	
-	result := engine.scoreMatch(tx, stmt)
+	result, err := engine.scoreMatch(tx, stmt)
+	if err != nil {
+		t.Fatalf("Unexpected error in scoreMatch: %v", err)
+	}
 	
 	if result.ConfidenceScore < 0.9 {
 		t.Errorf("Expected high confidence for exact match, got %f", result.ConfidenceScore)
@@ -266,7 +269,10 @@ func TestMatchingEngine_calculateAmountScore(t *testing.T) {
 		Amount: decimal.NewFromFloat(100.00),
 	}
 	
-	score := engine.calculateAmountScore(tx, stmt)
+	score, err := engine.calculateAmountScore(tx, stmt)
+	if err != nil {
+		t.Fatalf("Unexpected error in calculateAmountScore: %v", err)
+	}
 	if score != 1.0 {
 		t.Errorf("Expected score 1.0 for exact match, got %f", score)
 	}
@@ -275,14 +281,20 @@ func TestMatchingEngine_calculateAmountScore(t *testing.T) {
 	engine.Config.AmountTolerancePercent = 1.0 // 1% tolerance
 	stmt.Amount = decimal.NewFromFloat(100.50) // 0.5% difference
 	
-	score = engine.calculateAmountScore(tx, stmt)
+	score, err = engine.calculateAmountScore(tx, stmt)
+	if err != nil {
+		t.Fatalf("Unexpected error in calculateAmountScore: %v", err)
+	}
 	if score <= 0.0 {
 		t.Errorf("Expected positive score within tolerance, got %f", score)
 	}
 	
 	// Test outside tolerance
 	stmt.Amount = decimal.NewFromFloat(105.00) // 5% difference
-	score = engine.calculateAmountScore(tx, stmt)
+	score, err = engine.calculateAmountScore(tx, stmt)
+	if err != nil {
+		t.Fatalf("Unexpected error in calculateAmountScore: %v", err)
+	}
 	if score != 0.0 {
 		t.Errorf("Expected score 0.0 outside tolerance, got %f", score)
 	}

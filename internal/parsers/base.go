@@ -9,6 +9,9 @@ import (
 	"os"
 	"strings"
 	"unicode/utf8"
+
+	"golang-reconciliation-service/pkg/errors"
+	"golang-reconciliation-service/pkg/logger"
 )
 
 // ParseError represents an error that occurred during CSV parsing
@@ -80,6 +83,7 @@ func DefaultParseConfig() *ParseConfig {
 // BaseParser provides common CSV parsing functionality
 type BaseParser struct {
 	config *ParseConfig
+	logger logger.Logger
 }
 
 // NewBaseParser creates a new BaseParser with the given configuration
@@ -87,8 +91,18 @@ func NewBaseParser(config *ParseConfig) *BaseParser {
 	if config == nil {
 		config = DefaultParseConfig()
 	}
+	
+	log := logger.GetGlobalLogger().WithComponent("base_parser")
+	log.WithFields(logger.Fields{
+		"has_header":        config.HasHeader,
+		"delimiter":         string(config.Delimiter),
+		"validate_encoding": config.ValidateEncoding,
+		"max_field_size":    config.MaxFieldSize,
+	}).Debug("Created base parser")
+	
 	return &BaseParser{
 		config: config,
+		logger: log,
 	}
 }
 
@@ -162,28 +176,46 @@ func (pc *ParseContext) GetColumnIndex(name string) int {
 
 // OpenFile opens a CSV file and returns a csv.Reader
 func (bp *BaseParser) OpenFile(filePath string) (*os.File, *csv.Reader, error) {
+	bp.logger.WithField("file_path", filePath).Debug("Opening CSV file")
+	
 	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open file '%s': %w", filePath, err)
+		bp.logger.WithError(err).WithField("file_path", filePath).Error("Failed to open CSV file")
+		
+		// Determine the specific type of file error
+		if os.IsNotExist(err) {
+			return nil, nil, errors.FileError(errors.CodeFileNotFound, filePath, err)
+		}
+		if os.IsPermission(err) {
+			return nil, nil, errors.FileError(errors.CodeFilePermission, filePath, err)
+		}
+		
+		// Generic file error
+		return nil, nil, errors.FileError(errors.CodeDirectoryError, filePath, err)
 	}
 	
 	// Validate encoding if required
 	if bp.config.ValidateEncoding {
-		if err := bp.validateEncoding(file); err != nil {
+		bp.logger.WithField("file_path", filePath).Debug("Validating file encoding")
+		
+		if err := bp.validateEncoding(file, filePath); err != nil {
 			file.Close()
-			return nil, nil, fmt.Errorf("encoding validation failed for '%s': %w", filePath, err)
+			bp.logger.WithError(err).WithField("file_path", filePath).Error("File encoding validation failed")
+			return nil, nil, err // Already wrapped by validateEncoding
 		}
 		
 		// Seek back to beginning after validation
 		if _, err := file.Seek(0, 0); err != nil {
 			file.Close()
-			return nil, nil, fmt.Errorf("failed to seek to beginning of file '%s': %w", filePath, err)
+			bp.logger.WithError(err).WithField("file_path", filePath).Error("Failed to seek to beginning of file")
+			return nil, nil, errors.FileError(errors.CodeFileCorrupted, filePath, err)
 		}
 	}
 	
 	reader := csv.NewReader(file)
 	bp.configureReader(reader)
 	
+	bp.logger.WithField("file_path", filePath).Debug("Successfully opened CSV file")
 	return file, reader, nil
 }
 
@@ -202,27 +234,44 @@ func (bp *BaseParser) configureReader(reader *csv.Reader) {
 }
 
 // validateEncoding checks if the file contains valid UTF-8 text
-func (bp *BaseParser) validateEncoding(file *os.File) error {
+func (bp *BaseParser) validateEncoding(file *os.File, filePath string) error {
 	scanner := bufio.NewScanner(file)
 	lineNum := 0
 	
 	for scanner.Scan() && lineNum < 100 { // Check first 100 lines
 		lineNum++
 		if !utf8.Valid(scanner.Bytes()) {
-			return fmt.Errorf("invalid UTF-8 encoding detected at line %d", lineNum)
+			return errors.ParseError(
+				errors.CodeEncodingError,
+				filePath,
+				lineNum,
+				"encoding",
+				"",
+				fmt.Errorf("invalid UTF-8 encoding detected"),
+			).WithSuggestion("Save the file in UTF-8 encoding and try again")
 		}
 	}
 	
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return errors.FileError(errors.CodeFileCorrupted, filePath, err)
+	}
+	
+	return nil
 }
 
 // ReadHeaders reads and validates the header row
 func (bp *BaseParser) ReadHeaders(reader *csv.Reader, parseCtx *ParseContext, requiredHeaders []string) error {
+	bp.logger.WithFields(logger.Fields{
+		"has_header":        bp.config.HasHeader,
+		"required_headers":  requiredHeaders,
+	}).Debug("Reading CSV headers")
+	
 	if !bp.config.HasHeader {
 		// Generate default headers if no header row
 		if len(requiredHeaders) > 0 {
 			parseCtx.Headers = make([]string, len(requiredHeaders))
 			copy(parseCtx.Headers, requiredHeaders)
+			bp.logger.WithField("default_headers", parseCtx.Headers).Debug("Using default headers")
 		}
 		bp.buildHeaderMap(parseCtx)
 		return nil
@@ -232,20 +281,49 @@ func (bp *BaseParser) ReadHeaders(reader *csv.Reader, parseCtx *ParseContext, re
 	headers, err := reader.Read()
 	if err != nil {
 		if err == io.EOF {
-			return fmt.Errorf("file is empty or contains only headers")
+			bp.logger.Error("File is empty or contains no data")
+			return errors.ValidationError(
+				errors.CodeMissingField,
+				"file_content",
+				"empty",
+				nil,
+			).WithSuggestion("Ensure the file contains header and data rows")
 		}
-		return fmt.Errorf("failed to read headers: %w", err)
+		
+		bp.logger.WithError(err).Error("Failed to read header row")
+		return errors.ParseError(
+			errors.CodeInvalidFormat,
+			"",
+			1,
+			"headers",
+			"",
+			err,
+		).WithSuggestion("Check the file format and ensure it's a valid CSV")
 	}
 	
 	parseCtx.LineNumber++
 	parseCtx.Headers = bp.cleanHeaders(headers)
 	bp.buildHeaderMap(parseCtx)
 	
+	bp.logger.WithField("headers", parseCtx.Headers).Debug("Successfully read headers")
+	
 	// Validate required headers are present
 	if len(requiredHeaders) > 0 {
 		missing := bp.findMissingHeaders(parseCtx, requiredHeaders)
 		if len(missing) > 0 {
-			return fmt.Errorf("missing required headers: %s", strings.Join(missing, ", "))
+			bp.logger.WithFields(logger.Fields{
+				"missing_headers":   missing,
+				"available_headers": parseCtx.Headers,
+			}).Error("Required headers are missing")
+			
+			return errors.ParseError(
+				errors.CodeMissingColumn,
+				"",
+				parseCtx.LineNumber,
+				"headers",
+				strings.Join(missing, ", "),
+				nil,
+			).WithSuggestion(fmt.Sprintf("Ensure the CSV file contains these headers: %s", strings.Join(missing, ", ")))
 		}
 	}
 	
@@ -284,18 +362,29 @@ func (bp *BaseParser) findMissingHeaders(parseCtx *ParseContext, required []stri
 func (bp *BaseParser) ReadRecord(reader *csv.Reader, parseCtx *ParseContext) ([]string, error) {
 	for {
 		if parseCtx.IsCancelled() {
-			return nil, fmt.Errorf("parsing cancelled")
+			bp.logger.Debug("Record reading cancelled by context")
+			return nil, errors.InternalError(
+				errors.CodeUnexpectedError,
+				"csv_parsing",
+				fmt.Errorf("parsing cancelled"),
+			)
 		}
 		
 		record, err := reader.Read()
 		if err != nil {
-			return nil, err // EOF or other read error
+			if err == io.EOF {
+				return nil, err // Normal end of file
+			}
+			
+			bp.logger.WithError(err).WithField("line_number", parseCtx.LineNumber+1).Warn("Failed to read CSV record")
+			return nil, err // Pass through other read errors
 		}
 		
 		parseCtx.LineNumber++
 		
 		// Skip empty rows if configured
 		if bp.config.SkipEmptyRows && bp.isEmptyRecord(record) {
+			bp.logger.WithField("line_number", parseCtx.LineNumber).Debug("Skipping empty record")
 			continue
 		}
 		
@@ -303,10 +392,24 @@ func (bp *BaseParser) ReadRecord(reader *csv.Reader, parseCtx *ParseContext) ([]
 		if bp.config.MaxFieldSize > 0 {
 			for i, field := range record {
 				if len(field) > bp.config.MaxFieldSize {
+					bp.logger.WithFields(logger.Fields{
+						"line_number": parseCtx.LineNumber,
+						"column":      i,
+						"field_size":  len(field),
+						"max_size":    bp.config.MaxFieldSize,
+					}).Warn("Field exceeds maximum size limit")
+					
 					parseCtx.AddError(i, fmt.Sprintf("field_%d", i), field[:50]+"...", 
 						fmt.Sprintf("field exceeds maximum size of %d bytes", bp.config.MaxFieldSize), nil)
-					return nil, fmt.Errorf("field size limit exceeded at line %d, column %d", 
-						parseCtx.LineNumber, i)
+					
+					return nil, errors.ParseError(
+						errors.CodeInvalidData,
+						"",
+						parseCtx.LineNumber,
+						fmt.Sprintf("field_%d", i),
+						field[:50]+"...",
+						fmt.Errorf("field size limit exceeded"),
+					).WithSuggestion(fmt.Sprintf("Reduce field size to under %d bytes", bp.config.MaxFieldSize))
 				}
 			}
 		}
@@ -329,15 +432,41 @@ func (bp *BaseParser) isEmptyRecord(record []string) bool {
 func (bp *BaseParser) GetFieldValue(record []string, parseCtx *ParseContext, fieldName string) (string, error) {
 	index := parseCtx.GetColumnIndex(fieldName)
 	if index == -1 {
-		return "", fmt.Errorf("field '%s' not found in headers", fieldName)
+		bp.logger.WithFields(logger.Fields{
+			"field_name":       fieldName,
+			"available_headers": parseCtx.Headers,
+		}).Debug("Field not found in headers")
+		
+		return "", errors.ParseError(
+			errors.CodeMissingColumn,
+			"",
+			parseCtx.LineNumber,
+			fieldName,
+			"",
+			fmt.Errorf("field '%s' not found in headers", fieldName),
+		).WithSuggestion(fmt.Sprintf("Check the CSV headers. Available headers: %v", parseCtx.Headers))
 	}
 	
 	if index >= len(record) {
-		return "", fmt.Errorf("field '%s' (index %d) not present in record with %d fields", 
-			fieldName, index, len(record))
+		bp.logger.WithFields(logger.Fields{
+			"field_name":   fieldName,
+			"field_index":  index,
+			"record_length": len(record),
+			"line_number":  parseCtx.LineNumber,
+		}).Warn("Field index exceeds record length")
+		
+		return "", errors.ParseError(
+			errors.CodeInvalidData,
+			"",
+			parseCtx.LineNumber,
+			fieldName,
+			"",
+			fmt.Errorf("field '%s' (index %d) not present in record with %d fields", fieldName, index, len(record)),
+		).WithSuggestion("Check that all rows have the same number of columns as the header")
 	}
 	
-	return strings.TrimSpace(record[index]), nil
+	value := strings.TrimSpace(record[index])
+	return value, nil
 }
 
 // ParseStats holds statistics about a parsing operation
@@ -371,4 +500,23 @@ func (ps *ParseStats) HasErrors() bool {
 func (ps *ParseStats) String() string {
 	return fmt.Sprintf("Parsed %d lines, %d records (%d valid), %d errors",
 		ps.TotalLines, ps.RecordsParsed, ps.RecordsValid, ps.ErrorCount)
+}
+
+// GetSampleErrors returns a sample of the parsing errors for logging/debugging
+func (ps *ParseStats) GetSampleErrors(maxSamples int) []string {
+	if len(ps.Errors) == 0 {
+		return nil
+	}
+	
+	var samples []string
+	limit := len(ps.Errors)
+	if maxSamples > 0 && maxSamples < limit {
+		limit = maxSamples
+	}
+	
+	for i := 0; i < limit; i++ {
+		samples = append(samples, ps.Errors[i].Error())
+	}
+	
+	return samples
 }

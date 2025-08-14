@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"golang-reconciliation-service/internal/models"
+	"golang-reconciliation-service/pkg/errors"
+	"golang-reconciliation-service/pkg/logger"
 
 	"github.com/shopspring/decimal"
 )
@@ -16,6 +18,7 @@ type MatchingEngine struct {
 	Config                *MatchingConfig
 	TransactionIndex      *TransactionIndex
 	BankStatementIndex    *BankStatementIndex
+	logger                logger.Logger
 }
 
 // MatchResult represents the result of matching a transaction with bank statements
@@ -59,37 +62,125 @@ func NewMatchingEngine(config *MatchingConfig) *MatchingEngine {
 		config = DefaultMatchingConfig()
 	}
 	
+	log := logger.GetGlobalLogger().WithComponent("matching_engine")
+	log.WithFields(logger.Fields{
+		"amount_tolerance_percent": config.AmountTolerancePercent,
+		"date_tolerance_days":      config.DateToleranceDays,
+		"enable_fuzzy_matching":    config.EnableFuzzyMatching,
+		"min_confidence_score":     config.MinConfidenceScore,
+	}).Debug("Created matching engine")
+	
 	return &MatchingEngine{
 		Config: config,
+		logger: log,
 	}
 }
 
 // LoadTransactions loads transactions into the engine and builds indexes
-func (me *MatchingEngine) LoadTransactions(transactions []*models.Transaction) {
+func (me *MatchingEngine) LoadTransactions(transactions []*models.Transaction) error {
+	if transactions == nil {
+		return errors.ValidationError(
+			errors.CodeMissingField,
+			"transactions",
+			nil,
+			nil,
+		).WithSuggestion("Provide a valid slice of transactions")
+	}
+	
+	me.logger.WithField("transaction_count", len(transactions)).Info("Loading transactions into matching engine")
+	
+	if len(transactions) == 0 {
+		me.logger.Warn("No transactions provided to matching engine")
+		return errors.ValidationError(
+			errors.CodeMissingField,
+			"transactions",
+			0,
+			nil,
+		).WithSuggestion("Ensure there are transactions to reconcile")
+	}
+	
 	me.TransactionIndex = NewTransactionIndex(transactions)
+	
+	me.logger.WithField("transaction_count", len(transactions)).Debug("Successfully loaded transactions into index")
+	return nil
 }
 
 // LoadBankStatements loads bank statements into the engine and builds indexes
-func (me *MatchingEngine) LoadBankStatements(statements []*models.BankStatement) {
+func (me *MatchingEngine) LoadBankStatements(statements []*models.BankStatement) error {
+	if statements == nil {
+		return errors.ValidationError(
+			errors.CodeMissingField,
+			"bank_statements",
+			nil,
+			nil,
+		).WithSuggestion("Provide a valid slice of bank statements")
+	}
+	
+	me.logger.WithField("statement_count", len(statements)).Info("Loading bank statements into matching engine")
+	
+	if len(statements) == 0 {
+		me.logger.Warn("No bank statements provided to matching engine")
+		return errors.ValidationError(
+			errors.CodeMissingField,
+			"bank_statements",
+			0,
+			nil,
+		).WithSuggestion("Ensure there are bank statements to reconcile")
+	}
+	
 	me.BankStatementIndex = NewBankStatementIndex(statements)
+	
+	me.logger.WithField("statement_count", len(statements)).Debug("Successfully loaded bank statements into index")
+	return nil
 }
 
 // Reconcile performs the complete reconciliation process between transactions and bank statements
 func (me *MatchingEngine) Reconcile() (*ReconciliationResult, error) {
+	me.logger.Info("Starting reconciliation process")
+	
+	// Validate preconditions
 	if me.TransactionIndex == nil {
-		return nil, fmt.Errorf("transactions must be loaded before reconciliation")
+		me.logger.Error("Cannot reconcile: transactions not loaded")
+		return nil, errors.ValidationError(
+			errors.CodeMissingField,
+			"transaction_index",
+			nil,
+			nil,
+		).WithSuggestion("Load transactions using LoadTransactions() before calling Reconcile()")
 	}
 	
 	if me.BankStatementIndex == nil {
-		return nil, fmt.Errorf("bank statements must be loaded before reconciliation")
+		me.logger.Error("Cannot reconcile: bank statements not loaded")
+		return nil, errors.ValidationError(
+			errors.CodeMissingField,
+			"bank_statement_index",
+			nil,
+			nil,
+		).WithSuggestion("Load bank statements using LoadBankStatements() before calling Reconcile()")
 	}
+	
+	transactionCount := len(me.TransactionIndex.AllTransactions)
+	statementCount := len(me.BankStatementIndex.AllStatements)
+	
+	me.logger.WithFields(logger.Fields{
+		"transaction_count": transactionCount,
+		"statement_count":   statementCount,
+	}).Info("Beginning reconciliation of transactions and bank statements")
 	
 	var matches []*MatchResult
 	matchedTransactionIDs := make(map[string]bool)
 	matchedStatementIDs := make(map[string]bool)
 	
 	// Find matches for each transaction
-	for _, tx := range me.TransactionIndex.AllTransactions {
+	for i, tx := range me.TransactionIndex.AllTransactions {
+		if i%100 == 0 && i > 0 {
+			me.logger.WithFields(logger.Fields{
+				"processed": i,
+				"total":     transactionCount,
+				"progress":  float64(i) / float64(transactionCount) * 100,
+			}).Debug("Transaction matching progress")
+		}
+		
 		if matchedTransactionIDs[tx.TrxID] {
 			continue // Already matched
 		}
@@ -100,7 +191,11 @@ func (me *MatchingEngine) Reconcile() (*ReconciliationResult, error) {
 		}
 		
 		// Score and rank candidates
-		scores := me.scoreTransactionCandidates(tx, candidates)
+		scores, err := me.scoreTransactionCandidates(tx, candidates)
+		if err != nil {
+			me.logger.WithError(err).WithField("transaction_id", tx.TrxID).Warn("Failed to score transaction candidates")
+			continue
+		}
 		
 		// Find best match above confidence threshold
 		if len(scores) > 0 && scores[0].ConfidenceScore >= me.Config.MinConfidenceScore {
@@ -111,6 +206,13 @@ func (me *MatchingEngine) Reconcile() (*ReconciliationResult, error) {
 				matches = append(matches, bestMatch)
 				matchedTransactionIDs[tx.TrxID] = true
 				matchedStatementIDs[bestMatch.BankStatement.UniqueIdentifier] = true
+				
+				me.logger.WithFields(logger.Fields{
+					"transaction_id":    tx.TrxID,
+					"statement_id":      bestMatch.BankStatement.UniqueIdentifier,
+					"match_type":        bestMatch.MatchType,
+					"confidence_score":  bestMatch.ConfidenceScore,
+				}).Debug("Found transaction match")
 			}
 		}
 	}
@@ -134,6 +236,16 @@ func (me *MatchingEngine) Reconcile() (*ReconciliationResult, error) {
 	// Calculate summary statistics
 	summary := me.calculateSummary(matches, unmatchedTransactions, unmatchedStatements)
 	
+	// Log reconciliation completion with summary
+	me.logger.WithFields(logger.Fields{
+		"total_transactions":     transactionCount,
+		"total_statements":       statementCount,
+		"matches_found":          len(matches),
+		"unmatched_transactions": len(unmatchedTransactions),
+		"unmatched_statements":   len(unmatchedStatements),
+		"match_rate":             float64(len(matches)) / float64(transactionCount) * 100,
+	}).Info("Reconciliation process completed successfully")
+	
 	return &ReconciliationResult{
 		Matches:              matches,
 		UnmatchedTransactions: unmatchedTransactions,
@@ -153,7 +265,7 @@ func (me *MatchingEngine) FindMatches(tx *models.Transaction) ([]*MatchResult, e
 		return []*MatchResult{}, nil
 	}
 	
-	return me.scoreTransactionCandidates(tx, candidates), nil
+	return me.scoreTransactionCandidates(tx, candidates)
 }
 
 // FindMatchesForStatement finds potential matches for a specific bank statement
@@ -171,11 +283,38 @@ func (me *MatchingEngine) FindMatchesForStatement(stmt *models.BankStatement) ([
 }
 
 // scoreTransactionCandidates scores bank statement candidates for a transaction
-func (me *MatchingEngine) scoreTransactionCandidates(tx *models.Transaction, candidates []*models.BankStatement) []*MatchResult {
+func (me *MatchingEngine) scoreTransactionCandidates(tx *models.Transaction, candidates []*models.BankStatement) ([]*MatchResult, error) {
+	if tx == nil {
+		return nil, errors.ValidationError(
+			errors.CodeMissingField,
+			"transaction",
+			nil,
+			nil,
+		).WithSuggestion("Provide a valid transaction for scoring")
+	}
+	
+	if len(candidates) == 0 {
+		me.logger.WithField("transaction_id", tx.TrxID).Debug("No candidates to score for transaction")
+		return []*MatchResult{}, nil
+	}
+	
 	var results []*MatchResult
 	
 	for _, stmt := range candidates {
-		result := me.scoreMatch(tx, stmt)
+		if stmt == nil {
+			me.logger.WithField("transaction_id", tx.TrxID).Warn("Encountered nil bank statement candidate")
+			continue
+		}
+		
+		result, err := me.scoreMatch(tx, stmt)
+		if err != nil {
+			me.logger.WithError(err).WithFields(logger.Fields{
+				"transaction_id": tx.TrxID,
+				"statement_id":   stmt.UniqueIdentifier,
+			}).Warn("Failed to score match")
+			continue
+		}
+		
 		if result.ConfidenceScore >= me.Config.MinConfidenceScore {
 			results = append(results, result)
 		}
@@ -186,7 +325,13 @@ func (me *MatchingEngine) scoreTransactionCandidates(tx *models.Transaction, can
 		return results[i].ConfidenceScore > results[j].ConfidenceScore
 	})
 	
-	return results
+	me.logger.WithFields(logger.Fields{
+		"transaction_id":   tx.TrxID,
+		"candidates_count": len(candidates),
+		"matches_count":    len(results),
+	}).Debug("Scored transaction candidates")
+	
+	return results, nil
 }
 
 // scoreStatementCandidates scores transaction candidates for a bank statement
@@ -194,7 +339,15 @@ func (me *MatchingEngine) scoreStatementCandidates(stmt *models.BankStatement, c
 	var results []*MatchResult
 	
 	for _, tx := range candidates {
-		result := me.scoreMatch(tx, stmt)
+		result, err := me.scoreMatch(tx, stmt)
+		if err != nil {
+			me.logger.WithError(err).WithFields(logger.Fields{
+				"transaction_id": tx.TrxID,
+				"statement_id":   stmt.UniqueIdentifier,
+			}).Warn("Failed to score statement candidate match")
+			continue
+		}
+		
 		if result.ConfidenceScore >= me.Config.MinConfidenceScore {
 			results = append(results, result)
 		}
@@ -209,7 +362,25 @@ func (me *MatchingEngine) scoreStatementCandidates(stmt *models.BankStatement, c
 }
 
 // scoreMatch calculates the match score between a transaction and bank statement
-func (me *MatchingEngine) scoreMatch(tx *models.Transaction, stmt *models.BankStatement) *MatchResult {
+func (me *MatchingEngine) scoreMatch(tx *models.Transaction, stmt *models.BankStatement) (*MatchResult, error) {
+	if tx == nil {
+		return nil, errors.ValidationError(
+			errors.CodeMissingField,
+			"transaction",
+			nil,
+			nil,
+		).WithSuggestion("Provide a valid transaction for scoring")
+	}
+	
+	if stmt == nil {
+		return nil, errors.ValidationError(
+			errors.CodeMissingField,
+			"bank_statement",
+			nil,
+			nil,
+		).WithSuggestion("Provide a valid bank statement for scoring")
+	}
+	
 	result := &MatchResult{
 		Transaction:   tx,
 		BankStatement: stmt,
@@ -221,7 +392,14 @@ func (me *MatchingEngine) scoreMatch(tx *models.Transaction, stmt *models.BankSt
 	normalizedStmtTime := me.Config.NormalizeTime(stmt.Date)
 	
 	// Calculate amount score
-	amountScore := me.calculateAmountScore(tx, stmt)
+	amountScore, err := me.calculateAmountScore(tx, stmt)
+	if err != nil {
+		return nil, errors.ReconciliationError(
+			errors.CodeProcessingError,
+			"amount_scoring",
+			err,
+		).WithSuggestion("Check the amount values in the transaction and bank statement")
+	}
 	result.AmountDifference = me.calculateAmountDifference(tx, stmt)
 	
 	// Calculate date score
@@ -241,33 +419,41 @@ func (me *MatchingEngine) scoreMatch(tx *models.Transaction, stmt *models.BankSt
 	result.MatchType = me.determineMatchType(result.ConfidenceScore, amountScore, dateScore, typeScore)
 	result.Reasons = me.generateMatchReasons(tx, stmt, amountScore, dateScore, typeScore)
 	
-	return result
+	return result, nil
 }
 
 // calculateAmountScore calculates the score based on amount matching
-func (me *MatchingEngine) calculateAmountScore(tx *models.Transaction, stmt *models.BankStatement) float64 {
+func (me *MatchingEngine) calculateAmountScore(tx *models.Transaction, stmt *models.BankStatement) (float64, error) {
+	if tx.Amount.IsZero() && stmt.Amount.IsZero() {
+		return 1.0, nil // Both zero amounts match exactly
+	}
+	
+	if tx.Amount.IsZero() || stmt.Amount.IsZero() {
+		return 0.0, nil // One zero, one non-zero cannot match
+	}
+	
 	txAmount := tx.Amount.Abs()
 	stmtAmount := stmt.Amount.Abs()
 	
 	// Check for exact match first
 	if txAmount.Equal(stmtAmount) {
-		return 1.0
+		return 1.0, nil
 	}
 	
 	// Calculate percentage difference
 	tolerance := me.Config.GetAmountTolerance(txAmount)
 	if tolerance.IsZero() {
-		return 0.0 // No tolerance, must be exact
+		return 0.0, nil // No tolerance, must be exact
 	}
 	
 	difference := txAmount.Sub(stmtAmount).Abs()
 	if difference.LessThanOrEqual(tolerance) {
 		// Linear decay based on difference relative to tolerance
 		diffRatio := difference.Div(tolerance).InexactFloat64()
-		return math.Max(0.0, 1.0-diffRatio)
+		return math.Max(0.0, 1.0-diffRatio), nil
 	}
 	
-	return 0.0
+	return 0.0, nil
 }
 
 // calculateDateScore calculates the score based on date proximity
