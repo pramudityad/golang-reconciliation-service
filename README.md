@@ -186,7 +186,7 @@ reconciler reconcile -s tx.csv -b stmt.csv --config reconciler.toml
 
 ```bash
 # Show version information
-reconciler version
+reconciler --version
 
 # Generate shell completion scripts
 reconciler completion bash > /etc/bash_completion.d/reconciler
