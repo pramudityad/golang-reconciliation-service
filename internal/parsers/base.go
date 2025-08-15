@@ -1,3 +1,42 @@
+// Package parsers provides robust CSV parsing capabilities for financial data.
+//
+// This package handles the complexities of parsing real-world financial CSV files,
+// including various formats, error handling, streaming for large files, and
+// concurrent processing capabilities.
+//
+// Key features:
+//   - Configurable CSV parsing for different bank and system formats
+//   - Streaming parsers for memory-efficient processing of large files
+//   - Concurrent parsing for multiple files
+//   - Comprehensive error handling and validation
+//   - Progress reporting for long-running operations
+//   - Memory monitoring and management
+//
+// Parser Types:
+//   - TransactionParser: for internal system transaction files
+//   - BankStatementParser: for external bank statement files
+//   - StreamingTransactionParser: memory-efficient version for large files
+//   - StreamingBankStatementParser: memory-efficient version for large files
+//   - ConcurrentParser: for processing multiple files simultaneously
+//
+// Example usage:
+//
+//	// Basic parsing
+//	config := &TransactionParserConfig{HasHeader: true}
+//	parser, err := NewTransactionParser(config)
+//	transactions, stats, err := parser.ParseTransactions("transactions.csv")
+//	
+//	// Streaming for large files
+//	streamConfig := DefaultStreamingConfig()
+//	streamParser, err := NewStreamingTransactionParser(config, streamConfig)
+//	err = streamParser.ParseTransactionsStream(ctx, "large_file.csv", batchSize, callback)
+//
+// The package handles common CSV variations found in financial systems:
+//   - Different date formats (ISO, US, European)
+//   - Various amount representations (with/without currency symbols)
+//   - Different transaction type encodings
+//   - Header presence/absence variations
+//   - Encoding issues (UTF-8, Latin-1)
 package parsers
 
 import (

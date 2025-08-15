@@ -1,3 +1,25 @@
+// Package models provides core data structures and types for the reconciliation service.
+//
+// This package defines the fundamental types used throughout the reconciliation process:
+//   - Transaction: represents system transaction records
+//   - BankStatement: represents bank statement entries
+//   - TransactionType: enumeration for transaction types (DEBIT/CREDIT)
+//
+// The package includes comprehensive validation, parsing utilities, and JSON marshaling
+// support for handling various data formats commonly found in financial systems.
+//
+// Example usage:
+//
+//	// Create a new transaction
+//	tx := models.NewTransaction("TX001", decimal.NewFromFloat(100.50), models.TransactionTypeCredit, time.Now())
+//	
+//	// Create from CSV data
+//	tx, err := models.CreateTransactionFromCSV("TX001", "100.50", "CREDIT", "2024-01-15T10:30:00Z")
+//	
+//	// Validate the transaction
+//	if err := tx.Validate(); err != nil {
+//		// handle validation error
+//	}
 package models
 
 import (
@@ -9,13 +31,17 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// TransactionType represents the type of transaction
+// TransactionType represents the type of financial transaction.
+// It distinguishes between money flowing into (CREDIT) or out of (DEBIT) an account.
 type TransactionType string
 
 const (
-	// TransactionTypeDebit represents a debit transaction
+	// TransactionTypeDebit represents a debit transaction (money flowing out of an account).
+	// In bank statements, debits are typically represented as negative amounts.
 	TransactionTypeDebit TransactionType = "DEBIT"
-	// TransactionTypeCredit represents a credit transaction
+	
+	// TransactionTypeCredit represents a credit transaction (money flowing into an account).
+	// In bank statements, credits are typically represented as positive amounts.
 	TransactionTypeCredit TransactionType = "CREDIT"
 )
 
@@ -29,7 +55,18 @@ func (t TransactionType) IsValid() bool {
 	return t == TransactionTypeDebit || t == TransactionTypeCredit
 }
 
-// Transaction represents a system transaction record
+// Transaction represents a system transaction record from the internal transaction system.
+// This is typically the source of truth for transaction data that needs to be reconciled
+// against external bank statements.
+//
+// Fields:
+//   - TrxID: Unique transaction identifier from the system
+//   - Amount: Transaction amount using decimal.Decimal for precise financial calculations
+//   - Type: Transaction type (DEBIT or CREDIT)
+//   - TransactionTime: Timestamp when the transaction occurred
+//
+// The struct supports JSON marshaling/unmarshaling and CSV parsing through struct tags.
+// Amounts are always stored as positive values, with the Type field indicating direction.
 type Transaction struct {
 	TrxID           string          `json:"trxID" csv:"trxID"`
 	Amount          decimal.Decimal `json:"amount" csv:"amount"`
@@ -144,7 +181,22 @@ func (t *Transaction) IsCredit() bool {
 	return t.Type == TransactionTypeCredit
 }
 
-// BankStatement represents a bank statement transaction record
+// BankStatement represents a bank statement transaction record from external bank data.
+// This represents the bank's record of a transaction that needs to be matched against
+// internal system transactions during reconciliation.
+//
+// Fields:
+//   - UniqueIdentifier: Bank's unique identifier for the transaction
+//   - Amount: Transaction amount as reported by the bank (may be negative for debits)
+//   - Date: Date when the transaction was processed by the bank
+//
+// Bank statements may use different conventions for representing debits and credits:
+//   - Some banks use negative amounts for debits, positive for credits
+//   - Others may use separate debit/credit columns
+//   - The Amount field preserves the bank's original sign convention
+//
+// Use GetTransactionType() to determine if this represents a debit or credit,
+// and NormalizeAmount() to get the absolute amount for comparison purposes.
 type BankStatement struct {
 	UniqueIdentifier string          `json:"unique_identifier" csv:"unique_identifier"`
 	Amount           decimal.Decimal `json:"amount" csv:"amount"`
@@ -316,9 +368,20 @@ func (bs *BankStatement) NormalizeAmount() decimal.Decimal {
 	return bs.GetAbsoluteAmount()
 }
 
-// Utility functions for type conversion and validation
+// Utility functions for type conversion and validation.
+// These functions provide robust parsing and validation capabilities for common
+// data format variations found in financial CSV files.
 
-// ParseDecimalFromString parses a decimal value from string with validation
+// ParseDecimalFromString parses a decimal value from string with validation and cleanup.
+// It handles common formatting variations found in financial data:
+//   - Removes currency symbols ($)
+//   - Removes thousand separators (,)
+//   - Trims whitespace
+//
+// Returns an error if the string cannot be parsed as a valid decimal number.
+//
+// Example:
+//	amount, err := ParseDecimalFromString("$1,234.56")  // Returns decimal 1234.56
 func ParseDecimalFromString(s string) (decimal.Decimal, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -338,7 +401,15 @@ func ParseDecimalFromString(s string) (decimal.Decimal, error) {
 	return d, nil
 }
 
-// ParseTransactionType parses and validates a transaction type from string
+// ParseTransactionType parses and validates a transaction type from string.
+// It accepts various common abbreviations and formats:
+//   - "DEBIT", "D", "DR" -> TransactionTypeDebit
+//   - "CREDIT", "C", "CR" -> TransactionTypeCredit
+//
+// The parsing is case-insensitive and trims whitespace.
+//
+// Example:
+//	txType, err := ParseTransactionType("dr")  // Returns TransactionTypeDebit
 func ParseTransactionType(s string) (TransactionType, error) {
 	s = strings.ToUpper(strings.TrimSpace(s))
 	
@@ -352,7 +423,18 @@ func ParseTransactionType(s string) (TransactionType, error) {
 	}
 }
 
-// ParseTimeWithFormats attempts to parse time from string using multiple common formats
+// ParseTimeWithFormats attempts to parse time from string using multiple common formats.
+// This function tries various date/time formats commonly found in CSV files:
+//   - RFC3339: "2006-01-02T15:04:05Z07:00"
+//   - ISO date with time: "2006-01-02 15:04:05"
+//   - ISO date only: "2006-01-02"
+//   - US format: "01/02/2006"
+//   - Human readable: "Jan 2, 2006"
+//
+// Returns the first successfully parsed time or an error if none match.
+//
+// Example:
+//	t, err := ParseTimeWithFormats("2024-01-15T10:30:00Z")  // Parses as RFC3339
 func ParseTimeWithFormats(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -448,7 +530,18 @@ func NormalizeIdentifier(id string) string {
 	return normalized
 }
 
-// CreateTransactionFromCSV creates a Transaction from CSV field values
+// CreateTransactionFromCSV creates a Transaction from CSV field values with full validation.
+// This is a convenience function that combines parsing and validation in one step.
+// It handles the complete process of:
+//   - Parsing amount from string (with currency symbol removal)
+//   - Parsing transaction type (accepting various abbreviations)
+//   - Parsing transaction time (trying multiple date formats)
+//   - Validating the resulting transaction
+//
+// Returns a fully validated Transaction or an error if any step fails.
+//
+// Example:
+//	tx, err := CreateTransactionFromCSV("TX001", "$100.50", "CREDIT", "2024-01-15T10:30:00Z")
 func CreateTransactionFromCSV(trxID, amountStr, typeStr, timeStr string) (*Transaction, error) {
 	// Parse amount
 	amount, err := ParseDecimalFromString(amountStr)
@@ -478,7 +571,16 @@ func CreateTransactionFromCSV(trxID, amountStr, typeStr, timeStr string) (*Trans
 	return transaction, nil
 }
 
-// CreateBankStatementFromCSV creates a BankStatement from CSV field values
+// CreateBankStatementFromCSV creates a BankStatement from CSV field values with full validation.
+// This is a convenience function for parsing bank statement CSV data that:
+//   - Parses amount from string (preserving sign for debit/credit indication)
+//   - Parses date (trying multiple common bank date formats)
+//   - Validates the resulting bank statement
+//
+// Returns a fully validated BankStatement or an error if any step fails.
+//
+// Example:
+//	stmt, err := CreateBankStatementFromCSV("BS001", "-100.50", "2024-01-15")
 func CreateBankStatementFromCSV(identifier, amountStr, dateStr string) (*BankStatement, error) {
 	// Parse amount
 	amount, err := ParseDecimalFromString(amountStr)

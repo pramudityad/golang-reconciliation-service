@@ -1,3 +1,30 @@
+// Package matcher provides the core transaction matching engine and configuration.
+//
+// This package implements sophisticated algorithms for matching system transactions
+// against bank statements, handling various real-world scenarios including:
+//   - Date tolerances for processing delays
+//   - Amount tolerances for rounding differences
+//   - Fuzzy matching for imperfect data
+//   - Timezone handling for global operations
+//   - Configurable matching weights and thresholds
+//
+// The matching engine uses a multi-stage approach:
+//  1. Candidate selection using indexed lookups
+//  2. Scoring based on amount, date, and type similarity
+//  3. Confidence-based filtering and ranking
+//  4. Best-match selection with conflict resolution
+//
+// Example usage:
+//
+//	config := matcher.DefaultMatchingConfig()
+//	config.DateToleranceDays = 2
+//	config.AmountTolerancePercent = 0.5
+//	
+//	engine := matcher.NewMatchingEngine(config)
+//	engine.LoadTransactions(transactions)
+//	engine.LoadBankStatements(statements)
+//	
+//	result, err := engine.Reconcile()
 package matcher
 
 import (
@@ -7,17 +34,27 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// TimezoneMode defines how timezone differences should be handled
+// TimezoneMode defines how timezone differences should be handled during matching.
+// Different timezone modes accommodate various business requirements and data sources.
 type TimezoneMode int
 
 const (
-	// TimezoneUTC normalizes all times to UTC
+	// TimezoneUTC normalizes all times to UTC before comparison.
+	// Use this for globally distributed systems with consistent UTC timestamps.
 	TimezoneUTC TimezoneMode = iota
-	// TimezoneLocal uses local system timezone
+	
+	// TimezoneLocal uses the local system timezone for time normalization.
+	// Use this when all data sources are in the same local timezone.
 	TimezoneLocal
-	// TimezoneIgnore ignores timezone differences (date-only comparison)
+	
+	// TimezoneIgnore ignores timezone differences by comparing dates only.
+	// This is the most common mode for financial reconciliation where
+	// transactions are typically processed on business days regardless of exact time.
 	TimezoneIgnore
-	// TimezoneBusiness uses business timezone specified in config
+	
+	// TimezoneBusiness uses a specified business timezone for normalization.
+	// Use this when your business operates in a specific timezone different
+	// from the system timezone.
 	TimezoneBusiness
 )
 
@@ -37,19 +74,32 @@ func (tm TimezoneMode) String() string {
 	}
 }
 
-// MatchType represents the type of match found
+// MatchType represents the quality and confidence level of a transaction match.
+// This classification helps determine how much manual review may be required.
 type MatchType int
 
 const (
-	// MatchExact represents a perfect match (amount, date, type)
+	// MatchExact represents a perfect match with high confidence.
+	// Typically: exact amount, same date, matching type.
+	// These matches usually require no manual review.
 	MatchExact MatchType = iota
-	// MatchClose represents a close match within tolerance
+	
+	// MatchClose represents a close match within configured tolerances.
+	// Typically: amounts within tolerance, dates within 1-2 days.
+	// These matches may require minimal review.
 	MatchClose
-	// MatchFuzzy represents a fuzzy match requiring review
+	
+	// MatchFuzzy represents a fuzzy match that meets minimum confidence threshold.
+	// Typically: larger date differences or amount variations.
+	// These matches usually require manual review before acceptance.
 	MatchFuzzy
-	// MatchPossible represents a possible match with low confidence
+	
+	// MatchPossible represents a potential match with low confidence.
+	// These matches require careful manual review and may be false positives.
 	MatchPossible
-	// MatchNone represents no match found
+	
+	// MatchNone indicates no suitable match was found for the transaction.
+	// These represent unmatched transactions requiring investigation.
 	MatchNone
 )
 
@@ -71,7 +121,22 @@ func (mt MatchType) String() string {
 	}
 }
 
-// MatchingConfig holds configuration parameters for transaction matching
+// MatchingConfig holds configuration parameters for transaction matching.
+// This configuration controls all aspects of the matching algorithm including
+// tolerances, weights, and behavioral options. Different configurations can be
+// used for different scenarios (strict vs relaxed matching).
+//
+// Key configuration areas:
+//   - Date/time handling: tolerances and timezone behavior
+//   - Amount handling: precision and tolerance percentages
+//   - Match quality: confidence thresholds and fuzzy matching
+//   - Performance: candidate limits and indexing behavior
+//   - Scoring: relative weights for different match criteria
+//
+// Use the provided factory functions for common scenarios:
+//   - DefaultMatchingConfig(): balanced approach for most use cases
+//   - StrictMatchingConfig(): tight tolerances for critical reconciliation
+//   - RelaxedMatchingConfig(): loose tolerances for exploratory matching
 type MatchingConfig struct {
 	// DateToleranceDays defines the number of days tolerance for date matching
 	DateToleranceDays int `json:"date_tolerance_days"`

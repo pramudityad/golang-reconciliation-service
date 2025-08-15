@@ -1,3 +1,31 @@
+// Package reconciler provides high-level orchestration for the reconciliation process.
+//
+// This package coordinates the entire reconciliation workflow, including:
+//   - File parsing and data loading
+//   - Data preprocessing and validation
+//   - Transaction matching execution
+//   - Progress tracking and reporting
+//   - Error handling and recovery
+//   - Result generation and formatting
+//
+// The ReconciliationOrchestrator provides the main entry point for complex
+// reconciliation operations that involve multiple files, preprocessing steps,
+// and comprehensive progress tracking.
+//
+// Example usage:
+//
+//	orchestrator := reconciler.NewReconciliationOrchestrator(service)
+//	orchestrator.AddProgressCallback(func(progress *ReconciliationProgress) {
+//		fmt.Printf("Progress: %.1f%% - %s\n", progress.PercentComplete, progress.CurrentStep)
+//	})
+//	
+//	request := &ReconciliationRequest{
+//		TransactionFiles: []string{"transactions.csv"},
+//		BankStatementFiles: []string{"statements.csv"},
+//		DateRange: DateRange{Start: startDate, End: endDate},
+//	}
+//	
+//	result, err := orchestrator.ProcessReconciliation(ctx, request)
 package reconciler
 
 import (
@@ -15,7 +43,23 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// ReconciliationOrchestrator handles advanced orchestration of reconciliation workflows
+// ReconciliationOrchestrator handles advanced orchestration of reconciliation workflows.
+// It coordinates complex multi-step reconciliation processes with progress tracking,
+// error handling, and comprehensive reporting capabilities.
+//
+// The orchestrator manages the complete lifecycle of reconciliation operations:
+//  1. Data preprocessing and validation
+//  2. File parsing with progress monitoring
+//  3. Transaction matching and scoring
+//  4. Result compilation and summary generation
+//  5. Error aggregation and reporting
+//
+// Key features:
+//   - Progress tracking with detailed step information
+//   - Concurrent file processing capabilities
+//   - Flexible callback system for progress monitoring
+//   - Comprehensive error handling and recovery
+//   - Support for complex reconciliation scenarios
 type ReconciliationOrchestrator struct {
 	service      *ReconciliationService
 	preprocessor *DataPreprocessor

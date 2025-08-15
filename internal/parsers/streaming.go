@@ -9,7 +9,19 @@ import (
 	"golang-reconciliation-service/internal/models"
 )
 
-// ProgressReport contains information about parsing progress
+// ProgressReport contains information about parsing progress for long-running operations.
+// This enables users to monitor parsing progress and estimate completion times
+// for large CSV files.
+//
+// Fields:
+//   - ProcessedRecords: Total number of CSV records processed so far
+//   - ValidRecords: Number of successfully parsed and validated records
+//   - ErrorCount: Number of records that failed parsing or validation
+//   - ElapsedTime: Time elapsed since parsing started
+//   - EstimatedTotal: Estimated total number of records (if available)
+//   - PercentComplete: Progress percentage (0-100), only accurate if EstimatedTotal > 0
+//
+// Progress reports are generated at configurable intervals during streaming operations.
 type ProgressReport struct {
 	ProcessedRecords int
 	ValidRecords     int
@@ -22,7 +34,19 @@ type ProgressReport struct {
 // ProgressCallback is called periodically to report parsing progress
 type ProgressCallback func(*ProgressReport)
 
-// StreamingTransactionParser provides streaming capabilities for transaction parsing
+// StreamingTransactionParser provides memory-efficient streaming capabilities for transaction parsing.
+// This parser is designed for processing large transaction files that may not fit in memory.
+// It processes data in configurable batches and supports progress reporting.
+//
+// Key features:
+//   - Memory-efficient batch processing
+//   - Progress reporting with estimated completion times
+//   - Context-based cancellation support
+//   - Configurable batch sizes for performance tuning
+//   - Advanced error handling and recovery
+//
+// Use this parser when processing files larger than available memory or when
+// you need progress reporting for long-running operations.
 type StreamingTransactionParser struct {
 	*TransactionParser
 	config *StreamingConfig

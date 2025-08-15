@@ -13,7 +13,24 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// MatchingEngine is the core engine responsible for transaction matching
+// MatchingEngine is the core engine responsible for transaction matching.
+// It implements a sophisticated matching algorithm that handles real-world
+// financial data variations and provides configurable matching criteria.
+//
+// The engine operates in three phases:
+//  1. Data Loading: Transactions and bank statements are loaded and indexed
+//  2. Candidate Selection: Fast index-based lookups identify potential matches
+//  3. Scoring & Selection: Detailed scoring determines the best matches
+//
+// Key features:
+//   - Indexed lookups for performance with large datasets
+//   - Configurable tolerances for date and amount matching
+//   - Weighted scoring system for match confidence
+//   - Fuzzy matching for imperfect data quality
+//   - Comprehensive match result reporting
+//
+// Thread safety: The MatchingEngine is not thread-safe. Create separate
+// instances for concurrent operations or use external synchronization.
 type MatchingEngine struct {
 	Config                *MatchingConfig
 	TransactionIndex      *TransactionIndex
@@ -21,7 +38,21 @@ type MatchingEngine struct {
 	logger                logger.Logger
 }
 
-// MatchResult represents the result of matching a transaction with bank statements
+// MatchResult represents the result of matching a transaction with a bank statement.
+// It contains all the information needed to understand the quality and details
+// of a potential match, including scoring details for audit purposes.
+//
+// Fields:
+//   - Transaction: The system transaction being matched
+//   - BankStatement: The bank statement entry that was matched
+//   - MatchType: Classification of match quality (Exact, Close, Fuzzy, etc.)
+//   - ConfidenceScore: Numerical confidence score (0.0 to 1.0)
+//   - AmountDifference: Absolute difference between transaction and statement amounts
+//   - DateDifference: Time difference between transaction and statement dates
+//   - Reasons: Human-readable explanations for why this match was made
+//
+// The ConfidenceScore is calculated using weighted criteria and can be used
+// to filter matches or determine review requirements.
 type MatchResult struct {
 	Transaction      *models.Transaction
 	BankStatement    *models.BankStatement
@@ -32,12 +63,18 @@ type MatchResult struct {
 	Reasons          []string
 }
 
-// ReconciliationResult represents the complete result of a reconciliation process
+// ReconciliationResult represents the complete result of a reconciliation process.
+// This is the primary output of the matching engine and contains all information
+// needed for reporting, analysis, and further processing.
+//
+// The result includes both successful matches and unmatched items, allowing
+// complete visibility into the reconciliation process. The Summary provides
+// aggregate statistics for quick analysis and reporting.
 type ReconciliationResult struct {
-	Matches              []*MatchResult
-	UnmatchedTransactions []*models.Transaction
-	UnmatchedStatements   []*models.BankStatement
-	Summary              ReconciliationSummary
+	Matches              []*MatchResult            // Successfully matched transaction pairs
+	UnmatchedTransactions []*models.Transaction     // System transactions with no matches
+	UnmatchedStatements   []*models.BankStatement   // Bank statements with no matches
+	Summary              ReconciliationSummary     // Aggregate statistics and totals
 }
 
 // ReconciliationSummary provides aggregate statistics about the reconciliation
