@@ -1,3 +1,32 @@
+// Package reporter provides comprehensive reporting capabilities for reconciliation results.
+//
+// This package generates various types of reports from reconciliation results,
+// supporting multiple output formats and providing detailed analysis of matches,
+// discrepancies, and summary statistics.
+//
+// Supported output formats:
+//   - Console: Human-readable tabular output for terminal display
+//   - JSON: Structured data format for programmatic consumption
+//   - CSV: Comma-separated format for spreadsheet applications
+//
+// Report types available:
+//   - Reconciliation reports: complete match and discrepancy analysis
+//   - Summary reports: high-level statistics and totals
+//   - Unmatched transaction reports: items requiring investigation
+//   - Match detail reports: in-depth analysis of specific matches
+//
+// Example usage:
+//
+//	reporter := reporter.NewReconciliationReporter()
+//	report, err := reporter.GenerateReport(result, reporter.FormatJSON)
+//	
+//	// Generate console report with custom options
+//	options := &ReportOptions{
+//		IncludeMatchDetails: true,
+//		SortBy: "amount",
+//		MaxItems: 100,
+//	}
+//	consoleReport, err := reporter.GenerateConsoleReport(result, options)
 package reporter
 
 import (
@@ -15,7 +44,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// OutputFormat represents the supported report output formats
+// OutputFormat represents the supported report output formats.
+// Each format is optimized for different use cases and audiences.
 type OutputFormat string
 
 const (
