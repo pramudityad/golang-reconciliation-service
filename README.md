@@ -660,6 +660,34 @@ reconciler reconcile --system-file tx.csv --bank-files stmt.csv --verbose
 reconciler reconcile --system-file tx.csv --bank-files stmt.csv --start-date 2024-01-01 --end-date 2024-01-07
 ```
 
+#### CLI Flag Errors
+
+**Symptoms**: "Error: unknown flag: --xxx" messages
+
+**Common Causes**:
+- Typos in flag names (e.g., `--ouput-format` instead of `--output-format`)
+- Using old command syntax
+- Incorrect flag combinations
+
+**Solutions**:
+```bash
+# Common typos to avoid:
+# ❌ --ouput-format (missing 't')
+# ✅ --output-format
+
+# ❌ --system (old syntax)
+# ✅ --system-file
+
+# ❌ --bank (old syntax)  
+# ✅ --bank-files
+
+# Use help to verify flag names
+reconciler reconcile --help
+
+# Test with minimal flags first
+reconciler reconcile --system-file tx.csv --bank-files stmt.csv
+```
+
 #### CSV Parsing Errors
 
 **Symptoms**: "Parse error at line X", "Invalid format" messages
