@@ -28,6 +28,14 @@ var (
 	dateTolerance   int
 	amountTolerance float64
 	showProgress    bool
+	
+	// Edge case handling flags
+	enableEdgeCases         bool
+	enableDuplicateDetection bool
+	enableTimezoneNorm      bool
+	enableSameDayMatching   bool
+	enablePartialMatching   bool
+	enableCurrencyConversion bool
 )
 
 // reconcileCmd represents the reconcile command
@@ -55,7 +63,13 @@ Examples:
     --date-tolerance 2 --amount-tolerance 0.1
   
   # With progress indicators
-  reconciler reconcile --system-file tx.csv --bank-files stmt.csv --progress`,
+  reconciler reconcile --system-file tx.csv --bank-files stmt.csv --progress
+  
+  # Disable edge case handling for faster processing
+  reconciler reconcile --system-file tx.csv --bank-files stmt.csv --enable-edge-cases=false
+  
+  # Enable partial matching for complex scenarios
+  reconciler reconcile --system-file tx.csv --bank-files stmt.csv --partial-matching`,
 	
 	PreRunE: validateReconcileFlags,
 	RunE:    runReconcile,
@@ -82,6 +96,14 @@ func init() {
 	
 	// UI flags
 	reconcileCmd.Flags().BoolVar(&showProgress, "progress", false, "show progress indicators")
+	
+	// Edge case handling flags
+	reconcileCmd.Flags().BoolVar(&enableEdgeCases, "enable-edge-cases", true, "enable advanced edge case handling")
+	reconcileCmd.Flags().BoolVar(&enableDuplicateDetection, "detect-duplicates", true, "detect duplicate transactions")
+	reconcileCmd.Flags().BoolVar(&enableTimezoneNorm, "normalize-timezones", true, "normalize timezone differences")
+	reconcileCmd.Flags().BoolVar(&enableSameDayMatching, "same-day-matching", true, "handle same-day transaction ambiguity")
+	reconcileCmd.Flags().BoolVar(&enablePartialMatching, "partial-matching", false, "enable partial amount matching (resource intensive)")
+	reconcileCmd.Flags().BoolVar(&enableCurrencyConversion, "currency-conversion", false, "enable currency conversion handling")
 
 	// Mark required flags
 	reconcileCmd.MarkFlagRequired("system-file")
@@ -97,6 +119,14 @@ func init() {
 	viper.BindPFlag("date-tolerance", reconcileCmd.Flags().Lookup("date-tolerance"))
 	viper.BindPFlag("amount-tolerance", reconcileCmd.Flags().Lookup("amount-tolerance"))
 	viper.BindPFlag("progress", reconcileCmd.Flags().Lookup("progress"))
+	
+	// Bind edge case handling flags
+	viper.BindPFlag("enable-edge-cases", reconcileCmd.Flags().Lookup("enable-edge-cases"))
+	viper.BindPFlag("detect-duplicates", reconcileCmd.Flags().Lookup("detect-duplicates"))
+	viper.BindPFlag("normalize-timezones", reconcileCmd.Flags().Lookup("normalize-timezones"))
+	viper.BindPFlag("same-day-matching", reconcileCmd.Flags().Lookup("same-day-matching"))
+	viper.BindPFlag("partial-matching", reconcileCmd.Flags().Lookup("partial-matching"))
+	viper.BindPFlag("currency-conversion", reconcileCmd.Flags().Lookup("currency-conversion"))
 }
 
 func validateReconcileFlags(cmd *cobra.Command, args []string) error {
@@ -250,6 +280,24 @@ func runReconcile(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create reconciliation service: %w", err)
 	}
+	
+	// Create orchestrator for advanced reconciliation if edge cases are enabled
+	var orchestrator *reconciler.ReconciliationOrchestrator
+	if enableEdgeCases {
+		orchestrator, err = reconciler.NewReconciliationOrchestrator(service, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create reconciliation orchestrator: %w", err)
+		}
+		
+		// Add progress callback if requested
+		if showProgress {
+			orchestrator.AddProgressCallback(func(progress *reconciler.ReconciliationProgress) {
+				fmt.Fprintf(os.Stderr, "\r[%d/%d] %s (%.1f%% complete)", 
+					progress.CompletedSteps, progress.TotalSteps, 
+					progress.CurrentStep, progress.PercentComplete)
+			})
+		}
+	}
 
 	// Parse date range
 	var startTime, endTime *time.Time
@@ -279,10 +327,56 @@ func runReconcile(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Processing reconciliation...\n")
 	}
 
-	// Perform reconciliation
-	result, err := service.ProcessReconciliation(ctx, request)
-	if err != nil {
-		return fmt.Errorf("reconciliation failed: %w", err)
+	// Perform reconciliation with edge case handling if enabled
+	var result *reconciler.ReconciliationResult
+	if enableEdgeCases && orchestrator != nil {
+		// Create reconciliation options based on flags
+		options := &reconciler.ReconciliationOptions{
+			UseAdvancedMatching:           true,
+			MatchingStrategies:           []string{"exact", "fuzzy", "amount_date"},
+			EnablePreprocessing:          true,
+			ParallelProcessing:           true,
+			MaxConcurrency:              4,
+			IncludeDetailedMetrics:       true,
+			IncludeMatchingScores:        true,
+			IncludeProcessingLogs:        viper.GetBool("verbose"),
+			IncludeDataQuality:          true,
+			PerformDiscrepancyAnalysis:   true,
+			PerformDuplicateDetection:    enableDuplicateDetection,
+			PerformDataQualityAnalysis:   true,
+			EnableEdgeCaseHandling:       enableEdgeCases,
+			EnableTimezoneNormalization:  enableTimezoneNorm,
+			EnableSameDayMatching:        enableSameDayMatching,
+			EnablePartialMatching:        enablePartialMatching,
+			EnableCurrencyConversion:     enableCurrencyConversion,
+		}
+		
+		enhancedResult, err := orchestrator.ProcessReconciliationWithAdvancedFeatures(ctx, request, options)
+		if err != nil {
+			return fmt.Errorf("advanced reconciliation failed: %w", err)
+		}
+		result = enhancedResult.ReconciliationResult
+		
+		// Show edge case results if verbose
+		if viper.GetBool("verbose") && enhancedResult.EdgeCaseResults != nil {
+			fmt.Fprintf(os.Stderr, "\nEdge case handling results:\n")
+			fmt.Fprintf(os.Stderr, "  Duplicate groups detected: %d\n", len(enhancedResult.EdgeCaseResults.DuplicateGroups))
+			fmt.Fprintf(os.Stderr, "  Same-day ambiguities: %d\n", len(enhancedResult.EdgeCaseResults.SameDayMatches))
+			fmt.Fprintf(os.Stderr, "  Partial matches found: %d\n", len(enhancedResult.EdgeCaseResults.PartialMatches))
+			fmt.Fprintf(os.Stderr, "  Edge cases detected: %d\n", enhancedResult.EdgeCaseResults.EdgeCasesDetected)
+			fmt.Fprintf(os.Stderr, "  Edge cases resolved: %d\n", enhancedResult.EdgeCaseResults.EdgeCasesResolved)
+		}
+		
+		if showProgress {
+			fmt.Fprintf(os.Stderr, "\n") // New line after progress
+		}
+	} else {
+		// Use basic reconciliation
+		basicResult, err := service.ProcessReconciliation(ctx, request)
+		if err != nil {
+			return fmt.Errorf("reconciliation failed: %w", err)
+		}
+		result = basicResult
 	}
 
 	// Generate report

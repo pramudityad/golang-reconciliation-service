@@ -63,6 +63,7 @@ import (
 type ReconciliationOrchestrator struct {
 	service      *ReconciliationService
 	preprocessor *DataPreprocessor
+	edgeHandler  *matcher.EdgeCaseHandler
 	logger       logger.Logger
 	
 	// Progress tracking
@@ -114,18 +115,26 @@ func NewReconciliationOrchestrator(
 	log := logger.GetGlobalLogger().WithComponent("reconciliation_orchestrator")
 	log.Debug("Creating reconciliation orchestrator")
 	
-	preprocessor := NewDataPreprocessor(preprocessingConfig)
+	// For now, preprocessor is optional - can be nil
+	var preprocessor *DataPreprocessor
+	if preprocessingConfig != nil {
+		preprocessor = NewDataPreprocessor(preprocessingConfig)
+	}
+	
+	// Initialize edge case handler with the matching configuration from the service
+	edgeHandler := matcher.NewEdgeCaseHandler(service.GetMatchingConfig())
 	
 	orchestrator := &ReconciliationOrchestrator{
 		service:      service,
 		preprocessor: preprocessor,
+		edgeHandler:  edgeHandler,
 		logger:       log,
 		currentProgress: &ReconciliationProgress{
-			TotalSteps: 6, // Parse system, parse banks, preprocess, filter, match, aggregate
+			TotalSteps: 8, // Parse system, parse banks, preprocess, edge cases, filter, match, post-process, aggregate
 		},
 	}
 	
-	log.Info("Reconciliation orchestrator created successfully")
+	log.Info("Reconciliation orchestrator created successfully with edge case handling")
 	return orchestrator, nil
 }
 
@@ -152,7 +161,7 @@ func (ro *ReconciliationOrchestrator) ProcessReconciliationWithAdvancedFeatures(
 	startTime := time.Now()
 	defer func() {
 		elapsed := time.Since(startTime)
-		ro.updateProgress("Completed", 6, elapsed)
+		ro.updateProgress("Completed", 8, elapsed)
 		ro.logger.WithField("elapsed_time", elapsed).Info("Advanced reconciliation process completed")
 	}()
 	
@@ -196,20 +205,41 @@ func (ro *ReconciliationOrchestrator) ProcessReconciliationWithAdvancedFeatures(
 		return nil, fmt.Errorf("failed to parse bank statements: %w", err)
 	}
 	
-	// Step 4: Apply filters and transformations
-	ro.updateProgress("Applying filters", 3, time.Since(startTime))
+	// Step 4: Handle edge cases (duplicates, timezone normalization)
+	ro.updateProgress("Handling edge cases", 3, time.Since(startTime))
+	edgeCaseResults, err := ro.performEdgeCaseHandling(ctx, transactions, statements, options)
+	if err != nil {
+		ro.logger.WithError(err).Warn("Edge case handling encountered issues")
+		// Continue with original data but log warnings
+		ro.addWarning(fmt.Sprintf("Edge case handling issues: %v", err))
+	} else {
+		// Use processed data from edge case handling
+		transactions = edgeCaseResults.ProcessedTransactions
+		statements = edgeCaseResults.ProcessedStatements
+	}
+	
+	// Step 5: Apply filters and transformations
+	ro.updateProgress("Applying filters", 4, time.Since(startTime))
 	transactions, statements = ro.applyAdvancedFiltering(transactions, statements, request, options)
 	
-	// Step 5: Perform reconciliation with enhanced matching
-	ro.updateProgress("Performing reconciliation", 4, time.Since(startTime))
+	// Step 6: Perform reconciliation with enhanced matching
+	ro.updateProgress("Performing reconciliation", 5, time.Since(startTime))
 	reconciliationResult, err := ro.performAdvancedMatching(ctx, transactions, statements, options)
 	if err != nil {
 		return nil, fmt.Errorf("reconciliation failed: %w", err)
 	}
 	
-	// Step 6: Generate enhanced results
-	ro.updateProgress("Generating results", 5, time.Since(startTime))
-	enhancedResult := ro.buildEnhancedResult(reconciliationResult, txStats, stmtStats, options, startTime)
+	// Step 7: Post-process edge case results
+	ro.updateProgress("Post-processing edge cases", 6, time.Since(startTime))
+	err = ro.postProcessEdgeCases(reconciliationResult, edgeCaseResults, options)
+	if err != nil {
+		ro.logger.WithError(err).Warn("Edge case post-processing encountered issues")
+		ro.addWarning(fmt.Sprintf("Edge case post-processing issues: %v", err))
+	}
+	
+	// Step 8: Generate enhanced results
+	ro.updateProgress("Generating results", 7, time.Since(startTime))
+	enhancedResult := ro.buildEnhancedResult(reconciliationResult, txStats, stmtStats, options, startTime, edgeCaseResults)
 	
 	return enhancedResult, nil
 }
@@ -238,6 +268,13 @@ type ReconciliationOptions struct {
 	PerformDuplicateDetection   bool                `json:"perform_duplicate_detection"`
 	PerformDataQualityAnalysis  bool                `json:"perform_data_quality_analysis"`
 	
+	// Edge case handling options
+	EnableEdgeCaseHandling      bool                `json:"enable_edge_case_handling"`
+	EnableTimezoneNormalization bool                `json:"enable_timezone_normalization"`
+	EnableSameDayMatching       bool                `json:"enable_same_day_matching"`
+	EnablePartialMatching       bool                `json:"enable_partial_matching"`
+	EnableCurrencyConversion    bool                `json:"enable_currency_conversion"`
+	
 	// Filtering options
 	AmountThresholds      *AmountThresholds         `json:"amount_thresholds,omitempty"`
 	DateRangeFilters      []*DateRange              `json:"date_range_filters,omitempty"`
@@ -264,6 +301,9 @@ type EnhancedReconciliationResult struct {
 	// Advanced analysis
 	TrendAnalysis         *TrendAnalysis         `json:"trend_analysis,omitempty"`
 	AnomalyDetection      *AnomalyDetection      `json:"anomaly_detection,omitempty"`
+	
+	// Edge case results
+	EdgeCaseResults       *EdgeCaseResults       `json:"edge_case_results,omitempty"`
 	
 	// Processing logs
 	ProcessingLogs        []string               `json:"processing_logs,omitempty"`
@@ -339,6 +379,22 @@ type AnomalyDetection struct {
 	OutlierTransactions  []*models.Transaction   `json:"outlier_transactions,omitempty"`
 }
 
+// EdgeCaseResults contains results from edge case handling
+type EdgeCaseResults struct {
+	ProcessedTransactions []*models.Transaction               `json:"processed_transactions"`
+	ProcessedStatements   []*models.BankStatement             `json:"processed_statements"`
+	
+	DuplicateGroups       []matcher.DuplicateGroup            `json:"duplicate_groups,omitempty"`
+	SameDayMatches        []*matcher.SameDayMatch             `json:"same_day_matches,omitempty"`
+	PartialMatches        []*matcher.PartialMatchResult       `json:"partial_matches,omitempty"`
+	TimezoneIssues        []*matcher.TimezoneResolution       `json:"timezone_issues,omitempty"`
+	CurrencyConversions   []*matcher.CurrencyMatchResult      `json:"currency_conversions,omitempty"`
+	
+	EdgeCasesDetected     int                                 `json:"edge_cases_detected"`
+	EdgeCasesResolved     int                                 `json:"edge_cases_resolved"`
+	ProcessingTime        time.Duration                       `json:"processing_time"`
+}
+
 // Default options for reconciliation
 func DefaultReconciliationOptions() *ReconciliationOptions {
 	return &ReconciliationOptions{
@@ -354,6 +410,11 @@ func DefaultReconciliationOptions() *ReconciliationOptions {
 		PerformDiscrepancyAnalysis: true,
 		PerformDuplicateDetection: true,
 		PerformDataQualityAnalysis: true,
+		EnableEdgeCaseHandling:    true,
+		EnableTimezoneNormalization: true,
+		EnableSameDayMatching:     true,
+		EnablePartialMatching:     false, // Disabled by default as it's resource intensive
+		EnableCurrencyConversion:  false, // Requires exchange rates
 	}
 }
 
@@ -364,7 +425,7 @@ func (ro *ReconciliationOrchestrator) initializeProgress() {
 	defer ro.progressMutex.Unlock()
 	
 	ro.currentProgress = &ReconciliationProgress{
-		TotalSteps:      6,
+		TotalSteps:      8,
 		CompletedSteps:  0,
 		StartTime:       time.Now(),
 		PercentComplete: 0.0,
@@ -510,6 +571,7 @@ func (ro *ReconciliationOrchestrator) buildEnhancedResult(
 	stmtStats map[string]*parsers.ParseStats,
 	options *ReconciliationOptions,
 	startTime time.Time,
+	edgeCaseResults *EdgeCaseResults,
 ) *EnhancedReconciliationResult {
 	
 	// Build base result
@@ -523,6 +585,7 @@ func (ro *ReconciliationOrchestrator) buildEnhancedResult(
 	enhancedResult := &EnhancedReconciliationResult{
 		ReconciliationResult: baseResult,
 		OptionsUsed:         options,
+		EdgeCaseResults:     edgeCaseResults,
 	}
 	
 	// Add enhanced metrics if requested
@@ -641,4 +704,132 @@ func (ro *ReconciliationOrchestrator) calculatePerformanceMetrics(startTime time
 		TotalProcessingTime: time.Since(startTime),
 		RecordsPerSecond:   0, // Would be calculated based on actual data
 	}
+}
+
+// performEdgeCaseHandling executes edge case handling based on options
+func (ro *ReconciliationOrchestrator) performEdgeCaseHandling(
+	ctx context.Context,
+	transactions []*models.Transaction,
+	statements []*models.BankStatement,
+	options *ReconciliationOptions,
+) (*EdgeCaseResults, error) {
+	
+	if !options.EnableEdgeCaseHandling {
+		// Return original data without processing
+		return &EdgeCaseResults{
+			ProcessedTransactions: transactions,
+			ProcessedStatements:   statements,
+			EdgeCasesDetected:     0,
+			EdgeCasesResolved:     0,
+			ProcessingTime:        0,
+		}, nil
+	}
+	
+	startTime := time.Now()
+	results := &EdgeCaseResults{
+		ProcessedTransactions: make([]*models.Transaction, len(transactions)),
+		ProcessedStatements:   make([]*models.BankStatement, len(statements)),
+	}
+	
+	// Copy original data
+	copy(results.ProcessedTransactions, transactions)
+	copy(results.ProcessedStatements, statements)
+	
+	ro.logger.Info("Starting edge case handling")
+	
+	// 1. Duplicate detection
+	if options.PerformDuplicateDetection {
+		ro.logger.Debug("Performing duplicate detection")
+		duplicateResult := ro.edgeHandler.DetectDuplicates(results.ProcessedTransactions)
+		if duplicateResult != nil && len(duplicateResult.Groups) > 0 {
+			results.DuplicateGroups = duplicateResult.Groups
+			results.EdgeCasesDetected += len(duplicateResult.Groups)
+			ro.logger.WithField("duplicate_groups", len(duplicateResult.Groups)).Info("Detected duplicate transaction groups")
+		}
+	}
+	
+	// 2. Timezone normalization
+	if options.EnableTimezoneNormalization {
+		ro.logger.Debug("Performing timezone normalization")
+		ro.edgeHandler.NormalizeTimezones(results.ProcessedTransactions, results.ProcessedStatements)
+		results.EdgeCasesResolved++
+		ro.logger.Info("Completed timezone normalization")
+	}
+	
+	// 3. Same-day transaction handling
+	if options.EnableSameDayMatching {
+		ro.logger.Debug("Handling same-day transactions")
+		// This requires the matching engine, so we'll collect the scenarios for later processing
+		sameDayMatches, err := ro.edgeHandler.HandleSameDayTransactions(
+			results.ProcessedTransactions,
+			results.ProcessedStatements,
+			ro.service.matchingEngine,
+		)
+		if err != nil {
+			ro.logger.WithError(err).Warn("Same-day transaction handling encountered issues")
+		} else if len(sameDayMatches) > 0 {
+			results.SameDayMatches = sameDayMatches
+			results.EdgeCasesDetected += len(sameDayMatches)
+			ro.logger.WithField("same_day_matches", len(sameDayMatches)).Info("Detected same-day ambiguous transactions")
+		}
+	}
+	
+	// 4. Partial matching (if enabled)
+	if options.EnablePartialMatching {
+		ro.logger.Debug("Performing partial matching analysis")
+		// This is computationally expensive, so we'll limit it to a subset
+		for i, tx := range results.ProcessedTransactions {
+			if i >= 100 { // Limit to first 100 transactions for performance
+				break
+			}
+			
+			partialMatches := ro.edgeHandler.HandlePartialMatches(tx, results.ProcessedStatements)
+			if len(partialMatches) > 0 {
+				results.PartialMatches = append(results.PartialMatches, partialMatches...)
+				results.EdgeCasesDetected += len(partialMatches)
+			}
+		}
+		if len(results.PartialMatches) > 0 {
+			ro.logger.WithField("partial_matches", len(results.PartialMatches)).Info("Detected partial matches")
+		}
+	}
+	
+	results.ProcessingTime = time.Since(startTime)
+	ro.logger.WithFields(logger.Fields{
+		"edge_cases_detected": results.EdgeCasesDetected,
+		"edge_cases_resolved": results.EdgeCasesResolved,
+		"processing_time":     results.ProcessingTime,
+	}).Info("Edge case handling completed")
+	
+	return results, nil
+}
+
+// postProcessEdgeCases handles edge case results after matching
+func (ro *ReconciliationOrchestrator) postProcessEdgeCases(
+	reconciliationResult *matcher.ReconciliationResult,
+	edgeCaseResults *EdgeCaseResults,
+	options *ReconciliationOptions,
+) error {
+	
+	if edgeCaseResults == nil || !options.EnableEdgeCaseHandling {
+		return nil
+	}
+	
+	ro.logger.Debug("Post-processing edge case results")
+	
+	// This would implement post-processing logic such as:
+	// - Flagging matches that involved edge cases
+	// - Adjusting confidence scores based on edge case scenarios
+	// - Generating recommendations for manual review
+	
+	// For now, just log the summary
+	ro.logger.WithFields(logger.Fields{
+		"duplicate_groups":      len(edgeCaseResults.DuplicateGroups),
+		"same_day_matches":      len(edgeCaseResults.SameDayMatches),
+		"partial_matches":       len(edgeCaseResults.PartialMatches),
+		"timezone_issues":       len(edgeCaseResults.TimezoneIssues),
+		"currency_conversions":  len(edgeCaseResults.CurrencyConversions),
+	}).Info("Edge case post-processing summary")
+	
+	return nil
 }
