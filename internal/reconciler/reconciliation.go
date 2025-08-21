@@ -335,3 +335,11 @@ func (rs *ReconciliationService) GetStats() *ProcessingStats {
 	// This would return real-time stats in a full implementation
 	return &ProcessingStats{}
 }
+
+// GetMatchingConfig returns the current matching configuration
+func (rs *ReconciliationService) GetMatchingConfig() *matcher.MatchingConfig {
+	if rs.matchingEngine == nil {
+		return matcher.DefaultMatchingConfig()
+	}
+	return rs.matchingEngine.GetConfiguration()
+}

@@ -686,3 +686,4 @@ func (me *MatchingEngine) GetStats() (IndexStats, IndexStats) {
 	
 	return txStats, stmtStats
 }
+
