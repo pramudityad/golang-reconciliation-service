@@ -333,13 +333,6 @@ func (sg *StatementGenerator) GenerateMismatched() []StatementTemplate {
 
 // generateDescription creates realistic transaction descriptions
 func (sg *StatementGenerator) generateDescription(amount decimal.Decimal) string {
-	descriptions := []string{
-		"Deposit", "Withdrawal", "Transfer In", "Transfer Out", "Payment",
-		"Direct Deposit", "ATM Withdrawal", "Wire Transfer", "Check Deposit",
-		"Online Payment", "Bill Payment", "Payroll", "Interest", "Fee",
-		"Refund", "Purchase", "Service Charge", "Maintenance Fee",
-	}
-	
 	if amount.IsPositive() {
 		creditDescriptions := []string{
 			"Deposit", "Transfer In", "Direct Deposit", "Check Deposit",

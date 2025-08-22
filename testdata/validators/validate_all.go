@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -286,7 +287,7 @@ func (mv *MasterValidator) RunValidator(spec ValidatorSpec) ValidationResult {
 // PrintSuiteSummary prints a summary of the validation suite results
 func (mv *MasterValidator) PrintSuiteSummary(suite ValidationSuite, results map[string]ValidationResult) {
 	fmt.Printf("Validation Suite Summary: %s\n", suite.Name)
-	fmt.Printf("========================%s\n", "="*len(suite.Name))
+	fmt.Printf("========================%s\n", strings.Repeat("=", len(suite.Name)))
 
 	totalValidators := len(suite.Validators)
 	passedValidators := 0
