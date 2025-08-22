@@ -261,29 +261,24 @@ help-master:
 # Create validation configuration
 config:
 	@echo "Creating validation configuration..."
-	@cat > validation_config.env << 'EOF'
-# Validation Configuration
-DATA_DIR=../csv
-OUTPUT_DIR=reports
-VERBOSE=false
-STRICT=false
-
-# Timeout settings (seconds)
-DATA_VALIDATION_TIMEOUT=120
-SCENARIO_VALIDATION_TIMEOUT=180
-E2E_VALIDATION_TIMEOUT=300
-
-# Performance thresholds
-MAX_PROCESSING_TIME_1K=2
-MAX_PROCESSING_TIME_10K=10
-MIN_TRANSACTION_RATE=100
-
-# Quality thresholds
-MIN_MATCH_RATE=80
-MAX_ERROR_RATE=5
-MIN_COVERAGE_PERCENT=95
-EOF
-	@echo "✅ Configuration created: validation_config.env"
+	@printf '# Validation Configuration\n' > validation_config.env
+	@printf 'DATA_DIR=../csv\n' >> validation_config.env
+	@printf 'OUTPUT_DIR=reports\n' >> validation_config.env
+	@printf 'VERBOSE=false\n' >> validation_config.env
+	@printf 'STRICT=false\n\n' >> validation_config.env
+	@printf '# Timeout settings (seconds)\n' >> validation_config.env
+	@printf 'DATA_VALIDATION_TIMEOUT=120\n' >> validation_config.env
+	@printf 'SCENARIO_VALIDATION_TIMEOUT=180\n' >> validation_config.env
+	@printf 'E2E_VALIDATION_TIMEOUT=300\n\n' >> validation_config.env
+	@printf '# Performance thresholds\n' >> validation_config.env
+	@printf 'MAX_PROCESSING_TIME_1K=2\n' >> validation_config.env
+	@printf 'MAX_PROCESSING_TIME_10K=10\n' >> validation_config.env
+	@printf 'MIN_TRANSACTION_RATE=100\n\n' >> validation_config.env
+	@printf '# Quality thresholds\n' >> validation_config.env
+	@printf 'MIN_MATCH_RATE=80\n' >> validation_config.env
+	@printf 'MAX_ERROR_RATE=5\n' >> validation_config.env
+	@printf 'MIN_COVERAGE_PERCENT=95\n' >> validation_config.env
+	@echo "Configuration created: validation_config.env"
 
 # Load configuration if it exists
 -include validation_config.env

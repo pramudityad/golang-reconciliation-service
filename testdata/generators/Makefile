@@ -250,35 +250,26 @@ install: build
 # Create sample configuration file
 config:
 	@echo "Creating sample configuration file..."
-	@cat > generator_config.env << 'EOF'
-# Test Data Generator Configuration
-# Copy this file and modify as needed
-
-# Output directory for generated files
-OUTPUT_DIR=../generated
-
-# Default record counts
-TRANSACTION_COUNT=1000
-STATEMENT_COUNT=1000
-
-# Default formats
-STATEMENT_FORMAT=bank1
-
-# Random seed (leave empty for random)
-SEED=
-
-# Date ranges
-START_DATE=2024-01-01
-END_DATE=2024-12-31
-
-# Amount ranges
-MIN_AMOUNT=0.01
-MAX_AMOUNT=50000.00
-
-# Matching ratios
-MATCH_RATIO=0.85
-EOF
-	@echo "✓ Configuration file created: generator_config.env"
+	@printf '# Test Data Generator Configuration\n' > generator_config.env
+	@printf '# Copy this file and modify as needed\n\n' >> generator_config.env
+	@printf '# Output directory for generated files\n' >> generator_config.env
+	@printf 'OUTPUT_DIR=../generated\n\n' >> generator_config.env
+	@printf '# Default record counts\n' >> generator_config.env
+	@printf 'TRANSACTION_COUNT=1000\n' >> generator_config.env
+	@printf 'STATEMENT_COUNT=1000\n\n' >> generator_config.env
+	@printf '# Default formats\n' >> generator_config.env
+	@printf 'STATEMENT_FORMAT=bank1\n\n' >> generator_config.env
+	@printf '# Random seed (leave empty for random)\n' >> generator_config.env
+	@printf 'SEED=\n\n' >> generator_config.env
+	@printf '# Date ranges\n' >> generator_config.env
+	@printf 'START_DATE=2024-01-01\n' >> generator_config.env
+	@printf 'END_DATE=2024-12-31\n\n' >> generator_config.env
+	@printf '# Amount ranges\n' >> generator_config.env
+	@printf 'MIN_AMOUNT=0.01\n' >> generator_config.env
+	@printf 'MAX_AMOUNT=50000.00\n\n' >> generator_config.env
+	@printf '# Matching ratios\n' >> generator_config.env
+	@printf 'MATCH_RATIO=0.85\n' >> generator_config.env
+	@echo "Configuration file created: generator_config.env"
 
 # Show summary of what can be generated
 summary:
